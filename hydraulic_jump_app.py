@@ -36,7 +36,7 @@ C_MODEL = '#cc0000'       # Rojo Académico (Dark Red) para Modelo/Salto
 C_GRID = '#bfbfbf'        # Gris suave
 
 # ============================================================================
-# 2. LÓGICA MATEMÁTICA (ALGORITMO DE ŞEN)
+# 2. LÓGICA MATEMÁTICA (ALGORITMO DE ŞEN) - CORREGIDO
 # ============================================================================
 
 def contar_cruces_ascendentes(serie, umbral):
@@ -68,22 +68,130 @@ def suavizado_armonico_fourier(cruces, n_armonicos=15):
     return suavizado
 
 def detectar_salto_significativo(umbrales, cruces_suavizados, umbral_error_min=5.0):
-    """Detecta el mínimo y valida si la caída es significativa (>5%)"""
-    idx_min = np.argmin(cruces_suavizados)
+    """
+    Detecta el mínimo LOCAL en zona activa, excluyendo extremos.
+    Calcula error relativo según Şen (2021): 100 × |N_prev - N_min| / N_prev
+    """
+    n = len(cruces_suavizados)
+    
+    # VALIDACIÓN: Serie muy corta
+    if n < 10:
+        return {
+            'indice': 0,
+            'nivel_salto': umbrales[0],
+            'valor_cruces': 0,
+            'valor_previo': 0,
+            'significancia': 0,
+            'es_valido': False,
+            'razon': 'Serie demasiado corta para análisis',
+            'percentil': 0
+        }
+    
+    # PASO 1: Excluir extremos (10% superior e inferior)
+    margen = max(1, int(n * 0.10))
+    zona_activa_start = margen
+    zona_activa_end = n - margen
+    
+    zona_activa = cruces_suavizados[zona_activa_start:zona_activa_end]
+    
+    if len(zona_activa) == 0:
+        # Fallback: usar toda la serie
+        zona_activa = cruces_suavizados
+        zona_activa_start = 0
+        zona_activa_end = n
+    
+    # PASO 2: Encontrar mínimo en zona activa
+    idx_min_local = np.argmin(zona_activa)
+    idx_min = idx_min_local + zona_activa_start  # Ajustar al índice original
+    
     valor_min = cruces_suavizados[idx_min]
-    valor_medio = np.mean(cruces_suavizados)
+    nivel_salto = umbrales[idx_min]
     
-    if valor_medio == 0: significancia = 0
-    else: significancia = abs(valor_medio - valor_min) / valor_medio * 100
+    # PASO 3: Buscar el pico previo más cercano (según Şen 2021)
+    # El "pico previo" es el máximo local antes de caer al valle
     
+    valor_prev = None
+    idx_prev = None
+    
+    # Estrategia: Buscar hacia ARRIBA (mayores valores de T) desde el mínimo
+    # Buscamos el primer máximo local significativo
+    if idx_min < n - 1:
+        for i in range(idx_min + 1, min(idx_min + 20, n)):  # Buscar en ventana de 20 puntos
+            if cruces_suavizados[i] > valor_min * 1.05:  # Al menos 5% mayor
+                # Encontrar el máximo en esta zona
+                pico_temp = cruces_suavizados[i]
+                idx_pico_temp = i
+                for j in range(i + 1, min(i + 10, n)):
+                    if cruces_suavizados[j] > pico_temp:
+                        pico_temp = cruces_suavizados[j]
+                        idx_pico_temp = j
+                valor_prev = pico_temp
+                idx_prev = idx_pico_temp
+                break
+    
+    # Si no encontró hacia arriba, buscar hacia ABAJO (menores valores de T)
+    if valor_prev is None and idx_min > 0:
+        for i in range(idx_min - 1, max(idx_min - 20, -1), -1):
+            if cruces_suavizados[i] > valor_min * 1.05:
+                pico_temp = cruces_suavizados[i]
+                idx_pico_temp = i
+                for j in range(i - 1, max(i - 10, -1), -1):
+                    if cruces_suavizados[j] > pico_temp:
+                        pico_temp = cruces_suavizados[j]
+                        idx_pico_temp = j
+                valor_prev = pico_temp
+                idx_prev = idx_pico_temp
+                break
+    
+    # Fallback: usar el valor inmediatamente adyacente
+    if valor_prev is None:
+        if idx_min > 0:
+            valor_prev = cruces_suavizados[idx_min - 1]
+            idx_prev = idx_min - 1
+        elif idx_min < n - 1:
+            valor_prev = cruces_suavizados[idx_min + 1]
+            idx_prev = idx_min + 1
+        else:
+            valor_prev = valor_min
+            idx_prev = idx_min
+    
+    # PASO 4: Calcular significancia según Şen (2021)
+    # Error Relativo = 100 × |N_prev - N_min| / N_prev
+    if valor_prev == 0 or valor_prev is None:
+        significancia = 0
+    else:
+        significancia = abs(valor_prev - valor_min) / valor_prev * 100
+    
+    # PASO 5: Validar que NO esté en extremos (verificación adicional)
+    percentil_nivel = (nivel_salto - umbrales[0]) / (umbrales[-1] - umbrales[0]) * 100
+    
+    # Rechazar si está en el 10% extremo superior o inferior
+    if percentil_nivel < 10 or percentil_nivel > 90:
+        return {
+            'indice': idx_min,
+            'nivel_salto': nivel_salto,
+            'valor_cruces': valor_min,
+            'valor_previo': valor_prev,
+            'significancia': significancia,
+            'es_valido': False,
+            'razon': f'Mínimo en extremo ({percentil_nivel:.1f}% del rango)',
+            'percentil': percentil_nivel
+        }
+    
+    # PASO 6: Validar significancia
     es_significativo = significancia > umbral_error_min
     
     return {
         'indice': idx_min,
-        'nivel_salto': umbrales[idx_min],
+        'nivel_salto': nivel_salto,
         'valor_cruces': valor_min,
+        'valor_previo': valor_prev,
+        'idx_previo': idx_prev,
+        'nivel_previo': umbrales[idx_prev] if idx_prev is not None else None,
         'significancia': significancia,
-        'es_valido': es_significativo
+        'es_valido': es_significativo,
+        'razon': 'Salto válido' if es_significativo else f'Caída insuficiente ({significancia:.1f}% < {umbral_error_min}%)',
+        'percentil': percentil_nivel
     }
 
 # ============================================================================
@@ -159,10 +267,14 @@ def main():
         
         # --- PESTAÑA 1: GRÁFICOS ---
         with tab1:
+            # Mensaje de diagnóstico mejorado
             if res['es_valido']:
-                st.success(f"✅ **Salto Detectado** | Nivel: {res['nivel_salto']:.2f} | Significancia: {res['significancia']:.2f}%")
+                st.success(f"✅ **Salto Detectado** | Nivel: {res['nivel_salto']:.2f} | Significancia: {res['significancia']:.2f}% | Posición: {res['percentil']:.1f}% del rango")
+                if res.get('nivel_previo'):
+                    st.info(f"📊 **Detalles del cálculo:**\n- N_min = {res['valor_cruces']:.3f} (en T={res['nivel_salto']:.2f})\n- N_prev = {res['valor_previo']:.3f} (en T={res['nivel_previo']:.2f})\n- Error = 100 × |{res['valor_previo']:.3f} - {res['valor_cruces']:.3f}| / {res['valor_previo']:.3f} = {res['significancia']:.2f}%")
             else:
-                st.warning(f"⚠️ **Sin Salto Significativo** (Caída {res['significancia']:.2f}% < Umbral {umbral_error}%)")
+                st.warning(f"⚠️ **Sin Salto Significativo**")
+                st.info(f"**Razón:** {res.get('razon', 'No especificada')}\n\n**Detalles:** Significancia = {res['significancia']:.2f}%, Posición = {res['percentil']:.1f}% del rango")
 
             # --- FIGURA 1: PANELES INDIVIDUALES ---
             fig1, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
@@ -189,14 +301,24 @@ def main():
             ax2.plot(cruces_smooth, umbrales, color=C_MODEL, lw=2.0, 
                     label='Harmonic Fit (Model)')
             
-            if res['es_valido']:
-                ax2.axhline(res['nivel_salto'], color=C_MODEL, linestyle='--', lw=1.2, alpha=0.7)
-                ax2.plot(res['valor_cruces'], res['nivel_salto'], 
-                        marker='o', color=C_MODEL, markersize=7, 
-                        label='Jump Point (Min)')
-                
-                ax2.text(res['valor_cruces'] + (max(cruces_raw)*0.05), res['nivel_salto'], 
-                         f"Min @ {res['nivel_salto']:.1f}", fontsize=9, color=C_MODEL, verticalalignment='center')
+            # Marcar el mínimo detectado (válido o no)
+            ax2.axhline(res['nivel_salto'], color=C_MODEL if res['es_valido'] else 'gray', 
+                       linestyle='--', lw=1.2, alpha=0.7)
+            ax2.plot(res['valor_cruces'], res['nivel_salto'], 
+                    marker='o', color=C_MODEL if res['es_valido'] else 'gray', markersize=7, 
+                    label='Jump Point (Min)' if res['es_valido'] else 'Min (Rejected)')
+            
+            # Marcar el pico previo si existe
+            if res.get('valor_previo') and res.get('idx_previo') is not None:
+                ax2.plot(res['valor_previo'], res['nivel_previo'], 
+                        marker='s', color='blue', markersize=6, alpha=0.6,
+                        label='Previous Peak')
+            
+            ax2.text(res['valor_cruces'] + (max(cruces_raw)*0.05 if max(cruces_raw) > 0 else 0.1), 
+                     res['nivel_salto'], 
+                     f"Min @ {res['nivel_salto']:.1f}", 
+                     fontsize=9, color=C_MODEL if res['es_valido'] else 'gray', 
+                     verticalalignment='center')
 
             ax2.set_xlabel("Number of Up-Crossings")
             ax2.set_ylabel("Truncation Level")
@@ -231,7 +353,6 @@ def main():
             ax_top.tick_params(axis='x', colors=C_MODEL)
 
             # === ESCALA VISUAL: MANTENER LA CURVA A LA IZQUIERDA ===
-            # El límite X superior es el triple del máximo de cruces.
             max_cruces = np.max(cruces_raw) if len(cruces_raw) > 0 else 10
             ax_top.set_xlim(0, max_cruces * 2.8) 
             
@@ -269,11 +390,16 @@ def main():
                 0
             ).round(2)
             
-            # Marca el Salto en el CSV para evitar confusiones
+            # Marca el Salto en el CSV
             df_res["Status"] = ""
             if res['es_valido']:
-                # Encontramos el índice del salto y le ponemos una marca
                 df_res.loc[df_res["Level (T)"] == res['nivel_salto'], "Status"] = f"<<< JUMP POINT (Sig: {res['significancia']:.2f}%)"
+            else:
+                df_res.loc[df_res["Level (T)"] == res['nivel_salto'], "Status"] = f"<<< MIN (Rejected: {res.get('razon', 'N/A')})"
+            
+            # Marcar el pico previo
+            if res.get('nivel_previo'):
+                df_res.loc[df_res["Level (T)"] == res['nivel_previo'], "Status"] = "<<< PREVIOUS PEAK"
             
             df_res = df_res.sort_values("Level (T)", ascending=False)
             
