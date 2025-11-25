@@ -1,4 +1,4 @@
-import streamlit as st
+            import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# TIPOGRAFÍA Y ESTILO GENERAL (Serif para estilo Paper)
+# TIPOGRAFÍA Y ESTILO GENERAL
 rcParams['font.family'] = 'serif'
 rcParams['font.serif'] = ['Times New Roman', 'Times', 'DejaVu Serif']
 rcParams['font.size'] = 12
@@ -28,15 +28,15 @@ rcParams['grid.alpha'] = 0.3
 rcParams['grid.linestyle'] = ':' 
 rcParams['axes.linewidth'] = 0.8
 rcParams['figure.dpi'] = 300 
-rcParams['mathtext.fontset'] = 'cm' # Estilo matemático LaTeX
+rcParams['mathtext.fontset'] = 'cm'
 
-# PALETA DE COLORES (Springer Standard: Black & Dark Red)
-C_OBSERVED = 'black'      # Datos observados (Puntos, Triángulos)
-C_MODEL = '#cc0000'       # Rojo Académico (Dark Red) para Modelo/Salto
-C_GRID = '#bfbfbf'        # Gris suave
+# PALETA DE COLORES
+C_OBSERVED = 'black'       
+C_MODEL = '#cc0000'        
+C_GRID = '#bfbfbf'         
 
 # ============================================================================
-# 2. LÓGICA MATEMÁTICA (ALGORITMO DE ŞEN) - CORREGIDO
+# 2. LÓGICA MATEMÁTICA (ALGORITMO DE ŞEN)
 # ============================================================================
 
 def contar_cruces_ascendentes(serie, umbral):
@@ -67,132 +67,46 @@ def suavizado_armonico_fourier(cruces, n_armonicos=15):
         suavizado += ai * np.cos(arg) + bi * np.sin(arg)
     return suavizado
 
-def detectar_salto_significativo(umbrales, cruces_suavizados, umbral_error_min=5.0):
+def detectar_saltos_significativos(umbrales, cruces_suavizados, umbral_error_min=5.0):
     """
-    Detecta el mínimo LOCAL en zona activa, excluyendo extremos.
-    Calcula error relativo según Şen (2021): 100 × |N_prev - N_min| / N_prev
+    Detecta saltos según Şen (2021):
+    
+    Para CADA punto i del ajuste de Fourier, calcula:
+    Error % = |Fourier[i] - Fourier[i-1]| / Fourier[i-1] × 100
+    
+    Si Error % > umbral, ese punto es un salto (independiente de si sube o baja).
+    Esto detecta saltos en AMBOS lados de la curva.
     """
     n = len(cruces_suavizados)
+    saltos_detectados = []
     
-    # VALIDACIÓN: Serie muy corta
-    if n < 10:
-        return {
-            'indice': 0,
-            'nivel_salto': umbrales[0],
-            'valor_cruces': 0,
-            'valor_previo': 0,
-            'significancia': 0,
-            'es_valido': False,
-            'razon': 'Serie demasiado corta para análisis',
-            'percentil': 0
-        }
-    
-    # PASO 1: Excluir extremos (10% superior e inferior)
-    margen = max(1, int(n * 0.10))
-    zona_activa_start = margen
-    zona_activa_end = n - margen
-    
-    zona_activa = cruces_suavizados[zona_activa_start:zona_activa_end]
-    
-    if len(zona_activa) == 0:
-        # Fallback: usar toda la serie
-        zona_activa = cruces_suavizados
-        zona_activa_start = 0
-        zona_activa_end = n
-    
-    # PASO 2: Encontrar mínimo en zona activa
-    idx_min_local = np.argmin(zona_activa)
-    idx_min = idx_min_local + zona_activa_start  # Ajustar al índice original
-    
-    valor_min = cruces_suavizados[idx_min]
-    nivel_salto = umbrales[idx_min]
-    
-    # PASO 3: Buscar el pico previo más cercano (según Şen 2021)
-    # El "pico previo" es el máximo local antes de caer al valle
-    
-    valor_prev = None
-    idx_prev = None
-    
-    # Estrategia: Buscar hacia ARRIBA (mayores valores de T) desde el mínimo
-    # Buscamos el primer máximo local significativo
-    if idx_min < n - 1:
-        for i in range(idx_min + 1, min(idx_min + 20, n)):  # Buscar en ventana de 20 puntos
-            if cruces_suavizados[i] > valor_min * 1.05:  # Al menos 5% mayor
-                # Encontrar el máximo en esta zona
-                pico_temp = cruces_suavizados[i]
-                idx_pico_temp = i
-                for j in range(i + 1, min(i + 10, n)):
-                    if cruces_suavizados[j] > pico_temp:
-                        pico_temp = cruces_suavizados[j]
-                        idx_pico_temp = j
-                valor_prev = pico_temp
-                idx_prev = idx_pico_temp
-                break
-    
-    # Si no encontró hacia arriba, buscar hacia ABAJO (menores valores de T)
-    if valor_prev is None and idx_min > 0:
-        for i in range(idx_min - 1, max(idx_min - 20, -1), -1):
-            if cruces_suavizados[i] > valor_min * 1.05:
-                pico_temp = cruces_suavizados[i]
-                idx_pico_temp = i
-                for j in range(i - 1, max(i - 10, -1), -1):
-                    if cruces_suavizados[j] > pico_temp:
-                        pico_temp = cruces_suavizados[j]
-                        idx_pico_temp = j
-                valor_prev = pico_temp
-                idx_prev = idx_pico_temp
-                break
-    
-    # Fallback: usar el valor inmediatamente adyacente
-    if valor_prev is None:
-        if idx_min > 0:
-            valor_prev = cruces_suavizados[idx_min - 1]
-            idx_prev = idx_min - 1
-        elif idx_min < n - 1:
-            valor_prev = cruces_suavizados[idx_min + 1]
-            idx_prev = idx_min + 1
+    # Calcular error relativo para CADA punto respecto al anterior
+    for i in range(1, n):
+        fourier_actual = cruces_suavizados[i]
+        fourier_anterior = cruces_suavizados[i - 1]
+        
+        # Calcular error relativo: |Fourier[i] - Fourier[i-1]| / Fourier[i-1] × 100
+        if fourier_anterior > 0:
+            error_relativo = abs(fourier_actual - fourier_anterior) / fourier_anterior * 100
         else:
-            valor_prev = valor_min
-            idx_prev = idx_min
+            error_relativo = 0.0
+        
+        # Detectar salto si error > umbral (sin importar dirección)
+        if error_relativo > umbral_error_min:
+            saltos_detectados.append({
+                'indice': i,
+                'nivel_salto': umbrales[i],
+                'fourier_actual': fourier_actual,
+                'fourier_anterior': fourier_anterior,
+                'error_relativo': error_relativo,
+                'tipo': 'Caída' if fourier_actual < fourier_anterior else 'Subida',
+                'es_valido': True
+            })
     
-    # PASO 4: Calcular significancia según Şen (2021)
-    # Error Relativo = 100 × |N_prev - N_min| / N_prev
-    if valor_prev == 0 or valor_prev is None:
-        significancia = 0
-    else:
-        significancia = abs(valor_prev - valor_min) / valor_prev * 100
+    # Ordenar por nivel (de mayor a menor)
+    saltos_detectados.sort(key=lambda x: x['nivel_salto'], reverse=True)
     
-    # PASO 5: Validar que NO esté en extremos (verificación adicional)
-    percentil_nivel = (nivel_salto - umbrales[0]) / (umbrales[-1] - umbrales[0]) * 100
-    
-    # Rechazar si está en el 10% extremo superior o inferior
-    if percentil_nivel < 10 or percentil_nivel > 90:
-        return {
-            'indice': idx_min,
-            'nivel_salto': nivel_salto,
-            'valor_cruces': valor_min,
-            'valor_previo': valor_prev,
-            'significancia': significancia,
-            'es_valido': False,
-            'razon': f'Mínimo en extremo ({percentil_nivel:.1f}% del rango)',
-            'percentil': percentil_nivel
-        }
-    
-    # PASO 6: Validar significancia
-    es_significativo = significancia > umbral_error_min
-    
-    return {
-        'indice': idx_min,
-        'nivel_salto': nivel_salto,
-        'valor_cruces': valor_min,
-        'valor_previo': valor_prev,
-        'idx_previo': idx_prev,
-        'nivel_previo': umbrales[idx_prev] if idx_prev is not None else None,
-        'significancia': significancia,
-        'es_valido': es_significativo,
-        'razon': 'Salto válido' if es_significativo else f'Caída insuficiente ({significancia:.1f}% < {umbral_error_min}%)',
-        'percentil': percentil_nivel
-    }
+    return saltos_detectados
 
 # ============================================================================
 # 3. INTERFAZ DE USUARIO
@@ -204,8 +118,8 @@ def render_sidebar():
         n_umbrales = st.slider("Niveles de Truncación (k)", 50, 300, 100, 10)
         n_armonicos = st.slider("Armónicos Fourier (m)", 1, 50, 15, 1)
         st.markdown("---")
-        umbral_error = st.number_input("Significancia Mín. Salto (%)", 1.0, 20.0, 5.0, 0.5, 
-                                     help="Mínima caída % requerida para considerar un salto válido.")
+        umbral_error = st.number_input("Error Relativo Mín. (%)", 1.0, 50.0, 5.0, 0.5, 
+                                     help="Error % = |Fourier[i] - Fourier[i-1]| / Fourier[i-1] × 100")
         
         # --- CRÉDITOS AL GRUPO G ---
         st.markdown("---")
@@ -253,28 +167,27 @@ def main():
         with col_a:
             modo = st.radio("Input:", ["Datos Prueba", "Subir Archivo"])
         with col_b:
+            years, serie = None, None
             if modo == "Subir Archivo":
                 years, serie = cargar_datos()
             else:
                 years, serie = generar_sinteticos()
                 if modo == "Datos Prueba": st.info("Usando datos sintéticos para demostración.")
 
-    if serie is not None:
+    if serie is not None and len(serie) > 2:
         # Cálculos
         umbrales, cruces_raw = calcular_perfil_cruces(serie, n_umbrales)
         cruces_smooth = suavizado_armonico_fourier(cruces_raw, n_armonicos)
-        res = detectar_salto_significativo(umbrales, cruces_smooth, umbral_error)
+        saltos = detectar_saltos_significativos(umbrales, cruces_smooth, umbral_error)
         
         # --- PESTAÑA 1: GRÁFICOS ---
         with tab1:
-            # Mensaje de diagnóstico mejorado
-            if res['es_valido']:
-                st.success(f"✅ **Salto Detectado** | Nivel: {res['nivel_salto']:.2f} | Significancia: {res['significancia']:.2f}% | Posición: {res['percentil']:.1f}% del rango")
-                if res.get('nivel_previo'):
-                    st.info(f"📊 **Detalles del cálculo:**\n- N_min = {res['valor_cruces']:.3f} (en T={res['nivel_salto']:.2f})\n- N_prev = {res['valor_previo']:.3f} (en T={res['nivel_previo']:.2f})\n- Error = 100 × |{res['valor_previo']:.3f} - {res['valor_cruces']:.3f}| / {res['valor_previo']:.3f} = {res['significancia']:.2f}%")
+            if len(saltos) > 0:
+                st.success(f"✅ **{len(saltos)} Salto(s) Detectado(s)**")
+                for idx, s in enumerate(saltos[:5], 1):
+                    st.info(f"**Salto {idx}:** Nivel = {s['nivel_salto']:.2f} | Error = {s['error_relativo']:.2f}% | {s['tipo']} (F={s['fourier_actual']:.1f}, F_prev={s['fourier_anterior']:.1f})")
             else:
-                st.warning(f"⚠️ **Sin Salto Significativo**")
-                st.info(f"**Razón:** {res.get('razon', 'No especificada')}\n\n**Detalles:** Significancia = {res['significancia']:.2f}%, Posición = {res['percentil']:.1f}% del rango")
+                st.warning(f"⚠️ **Sin Saltos Detectados** (ningún cambio con error > {umbral_error}%)")
 
             # --- FIGURA 1: PANELES INDIVIDUALES ---
             fig1, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
@@ -283,17 +196,16 @@ def main():
             ax1.plot(years, serie, color=C_OBSERVED, lw=0.8, label='Observed Series')
             ax1.scatter(years, serie, color=C_OBSERVED, s=12, marker='o', alpha=0.7)
             
-            if res['es_valido']:
-                # Línea de Salto ROJA
-                ax1.axhline(res['nivel_salto'], color=C_MODEL, linestyle='--', lw=1.5, 
-                           label=f'Jump Level ({res["nivel_salto"]:.1f})')
+            # Marcar niveles de salto en la serie temporal
+            for salto in saltos[:3]:
+                ax1.axhline(salto['nivel_salto'], color=C_MODEL, linestyle='--', lw=1.0, alpha=0.6)
             
             ax1.set_xlabel("Time (Years)")
             ax1.set_ylabel("Hydrological Variable")
             ax1.set_title("(a) Time Series Record", loc='center')
             ax1.legend(loc='upper left', frameon=True, fancybox=False, edgecolor='black', fontsize=9)
 
-            # (b) CROSSING PROFILE (TRIÁNGULOS VACÍOS)
+            # (b) CROSSING PROFILE
             ax2.scatter(cruces_raw, umbrales, 
                        facecolors='none', edgecolors=C_OBSERVED, marker='^', s=45, lw=0.8, 
                        label='Actual Crossings')
@@ -301,24 +213,17 @@ def main():
             ax2.plot(cruces_smooth, umbrales, color=C_MODEL, lw=2.0, 
                     label='Harmonic Fit (Model)')
             
-            # Marcar el mínimo detectado (válido o no)
-            ax2.axhline(res['nivel_salto'], color=C_MODEL if res['es_valido'] else 'gray', 
-                       linestyle='--', lw=1.2, alpha=0.7)
-            ax2.plot(res['valor_cruces'], res['nivel_salto'], 
-                    marker='o', color=C_MODEL if res['es_valido'] else 'gray', markersize=7, 
-                    label='Jump Point (Min)' if res['es_valido'] else 'Min (Rejected)')
-            
-            # Marcar el pico previo si existe
-            if res.get('valor_previo') and res.get('idx_previo') is not None:
-                ax2.plot(res['valor_previo'], res['nivel_previo'], 
-                        marker='s', color='blue', markersize=6, alpha=0.6,
-                        label='Previous Peak')
-            
-            ax2.text(res['valor_cruces'] + (max(cruces_raw)*0.05 if max(cruces_raw) > 0 else 0.1), 
-                     res['nivel_salto'], 
-                     f"Min @ {res['nivel_salto']:.1f}", 
-                     fontsize=9, color=C_MODEL if res['es_valido'] else 'gray', 
-                     verticalalignment='center')
+            # Marcar TODOS los puntos de salto con círculos verdes
+            for salto in saltos:
+                ax2.plot(salto['fourier_actual'], salto['nivel_salto'], 
+                        marker='o', color='green', markersize=10, 
+                        markeredgecolor='darkgreen', markeredgewidth=2, alpha=0.8)
+                ax2.axhline(salto['nivel_salto'], color='green', linestyle=':', lw=1.0, alpha=0.3)
+
+            if len(saltos) > 0:
+                ax2.plot([], [], marker='o', color='green', markersize=10, 
+                        markeredgecolor='darkgreen', markeredgewidth=2,
+                        label=f'Jump Points ({len(saltos)})', linestyle='none')
 
             ax2.set_xlabel("Number of Up-Crossings")
             ax2.set_ylabel("Truncation Level")
@@ -327,43 +232,35 @@ def main():
 
             st.pyplot(fig1)
             
-            # Botón Descarga Fig 1
             buf1 = io.BytesIO()
             fig1.savefig(buf1, format='png', dpi=300, bbox_inches='tight')
             st.download_button("💾 Descargar Figuras (PNG Alta Calidad)", buf1.getvalue(), "figure1_sen_paper.png", "image/png")
 
-            # --- FIGURA 2: COMPOSITE PLOT (ESCALADO) ---
+            # --- FIGURA 2: COMPOSITE PLOT ---
             st.markdown("---")
             st.subheader("(c) Composite Diagnostic Plot")
             
             fig2, ax_main = plt.subplots(figsize=(10, 6))
             
-            # Serie Temporal (Abajo) - Gris Oscuro
             ax_main.plot(years, serie, color='#555555', lw=1.0, alpha=0.8, label='Time Series')
             ax_main.set_xlabel("Time (Years)", fontsize=12)
             ax_main.set_ylabel("Magnitude / Truncation Level", fontsize=12)
             
-            # Cruces (Arriba) - Rojo
             ax_top = ax_main.twiny()
             ax_top.plot(cruces_smooth, umbrales, color=C_MODEL, lw=2.5, label='Crossing Profile (Fourier)')
-            # Relleno rojo muy suave
             ax_top.fill_betweenx(umbrales, 0, cruces_smooth, color=C_MODEL, alpha=0.05)
             
             ax_top.set_xlabel("Number of Crossings", fontsize=12, color=C_MODEL)
             ax_top.tick_params(axis='x', colors=C_MODEL)
 
-            # === ESCALA VISUAL: MANTENER LA CURVA A LA IZQUIERDA ===
+            # Escala visual para no tapar datos
             max_cruces = np.max(cruces_raw) if len(cruces_raw) > 0 else 10
             ax_top.set_xlim(0, max_cruces * 2.8) 
             
-            # Línea de Salto
-            if res['es_valido']:
-                ax_main.axhline(res['nivel_salto'], color='black', linestyle='--', lw=1.5)
-                ax_main.text(years[0], res['nivel_salto'] + (max(serie)-min(serie))*0.02, 
-                             f" Jump Level ({res['nivel_salto']:.1f})", 
-                             color='black', fontsize=10, fontweight='bold')
+            # Marcar saltos en composite
+            for salto in saltos[:3]:
+                ax_main.axhline(salto['nivel_salto'], color='green', linestyle='--', lw=1.2, alpha=0.6)
 
-            # Leyenda Combinada
             lines1, labels1 = ax_main.get_legend_handles_labels()
             lines2, labels2 = ax_top.get_legend_handles_labels()
             ax_main.legend(lines1 + lines2, labels1 + labels2, loc='lower center', ncol=2, frameon=True)
@@ -383,30 +280,50 @@ def main():
                 "Fourier Fit": np.round(cruces_smooth, 3)
             })
             
-            # Fitting Error (Diferencia entre Curva y Puntos)
+            # Error de ajuste: (Fourier - Real) / Fourier * 100
             df_res["Fitting Error (%)"] = np.where(
-                df_res["Actual Crossings"] > 0, 
-                np.abs(df_res["Fourier Fit"] - df_res["Actual Crossings"]) / df_res["Actual Crossings"] * 100, 
+                df_res["Fourier Fit"] > 0, 
+                np.abs(df_res["Fourier Fit"] - df_res["Actual Crossings"]) / df_res["Fourier Fit"] * 100, 
                 0
             ).round(2)
             
-            # Marca el Salto en el CSV
-            df_res["Status"] = ""
-            if res['es_valido']:
-                df_res.loc[df_res["Level (T)"] == res['nivel_salto'], "Status"] = f"<<< JUMP POINT (Sig: {res['significancia']:.2f}%)"
-            else:
-                df_res.loc[df_res["Level (T)"] == res['nivel_salto'], "Status"] = f"<<< MIN (Rejected: {res.get('razon', 'N/A')})"
+            # Calcular error relativo punto a punto (para detección de saltos)
+            df_res["Relative Error (%)"] = 0.0
+            for i in range(1, len(df_res)):
+                N_actual = df_res.iloc[i]["Fourier Fit"]
+                N_anterior = df_res.iloc[i-1]["Fourier Fit"]
+                if N_anterior > 0:
+                    df_res.loc[i, "Relative Error (%)"] = round(
+                        abs(N_actual - N_anterior) / N_anterior * 100, 2
+                    )
             
-            # Marcar el pico previo
-            if res.get('nivel_previo'):
-                df_res.loc[df_res["Level (T)"] == res['nivel_previo'], "Status"] = "<<< PREVIOUS PEAK"
+            # Marcar saltos detectados
+            df_res["Jump Status"] = ""
+            for salto in saltos:
+                idx_salto = salto['indice']
+                df_res.loc[idx_salto, "Jump Status"] = f"<<< JUMP (Err: {salto['error_relativo']:.2f}%)"
             
-            df_res = df_res.sort_values("Level (T)", ascending=False)
+            df_res = df_res.sort_values("Level (T)", ascending=False).reset_index(drop=True)
             
             st.dataframe(df_res, use_container_width=True, height=500)
             st.download_button("📥 Descargar CSV", df_res.to_csv(index=False).encode('utf-8'), "sen_results.csv", "text/csv")
+            
+            # Mostrar resumen de saltos
+            if len(saltos) > 0:
+                st.markdown("### 📊 Resumen de Saltos Detectados")
+                df_saltos = pd.DataFrame([{
+                    'Nivel': s['nivel_salto'],
+                    'Fourier Actual': s['fourier_actual'],
+                    'Fourier Anterior': s['fourier_anterior'],
+                    'Error (%)': s['error_relativo'],
+                    'Tipo': s['tipo']
+                } for s in saltos])
+                st.dataframe(df_saltos, use_container_width=True)
 
-    # Footer Discreto
+    elif serie is not None and len(serie) <= 2:
+        st.error("Error: La serie temporal debe tener al menos 3 puntos de datos para el análisis.")
+    
+    # Footer
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>© 2023 Grupo G - Algoritmo de Detección de Saltos Hidrológicos</div>", unsafe_allow_html=True)
 
